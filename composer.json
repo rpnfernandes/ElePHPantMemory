@@ -1,0 +1,19 @@
+{
+    "name": "elephpant/memory",
+    "description": "An ultra-lightweight, zero-dependency local memory and context manager for AI chatbots.",
+    "type": "library",
+    "license": "GPL-3.0-or-later",
+    "authors": [
+        {
+            "name": "RFSW"
+        }
+    ],
+    "require": {
+        "php": ">=8.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "ElePHPant\\": ""
+        }
+    }
+}
