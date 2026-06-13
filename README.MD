@@ -1,4 +1,4 @@
-# ElePHPant 🐘💬
+# ElePHPantMemoryMemory 🐘💬
 
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](#)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
@@ -22,15 +22,15 @@ As APIs de IA sao **stateless** (nao guardam estado) e **caras**. Para manter um
 
 ---
 
-## 🚀 The Solution: How ElePHPant Works / A Solucao
+## 🚀 The Solution: How ElePHPantMemory Works / A Solucao
 
 ### English
-ElePHPant sits between your application and the AI API. It manages chat context using a two-tier architecture running entirely inside your host project's existing database:
+ElePHPantMemory sits between your application and the AI API. It manages chat context using a two-tier architecture running entirely inside your host project's existing database:
 1. **The Short-Term Memory:** Keeps only the most recent messages to maintain natural conversation flow.
 2. **The Long-Term Fact Sheet:** Extracts and preserves permanent business facts (e.g., user preferences, order IDs, VAT numbers) in a dedicated local table, injecting them as system prompts.
 
 ### Portugues (Portugal)
-O ElePHPant funciona como um filtro inteligente entre a tua aplicacao e a API de IA. Ele gere o contexto usando uma arquitetura de duas camadas que corre inteiramente dentro da base de dados existente do teu projeto:
+O ElePHPantMemory funciona como um filtro inteligente entre a tua aplicacao e a API de IA. Ele gere o contexto usando uma arquitetura de duas camadas que corre inteiramente dentro da base de dados existente do teu projeto:
 1. **Memoria de Curto Prazo:** Mantem apenas as mensagens mais recentes para garantir a fluidez natural da conversa.
 2. **Ficha de Factos de Longo Prazo:** Extrai e preserva factos permanentes do negocio (ex: preferencias, IDs de encomendas, NIFs) numa tabela local, injetando-os como prompts de sistema.
 
@@ -38,7 +38,7 @@ O ElePHPant funciona como um filtro inteligente entre a tua aplicacao e a API de
 
 ## 📊 Features & Comparison / Carateristicas e Comparacao
 
-| Feature / Funcionalidade | Standard AI Chat Flow | With ElePHPant 🐘 |
+| Feature / Funcionalidade | Standard AI Chat Flow | With ElePHPantMemory 🐘 |
 | :--- | :---: | :---: |
 | **API Token Costs** / *Custos de Tokens* | 📈 Increases exponentially | 📉 Flat and optimized |
 | **Memory Retention** / *Retencao de Memoria* | ❌ Forgets when context limits hit |  Never forgets core facts |
@@ -54,20 +54,20 @@ O ElePHPant funciona como um filtro inteligente entre a tua aplicacao e a API de
 
 #### Option A: Composer (Recommended / Recomendado)
 ```bash
-composer require elephpant/memory
+composer require ElePHPantMemory/memory
 ```
 
 #### Option B: Manual Include / Importacao Manual
 Download the package files and include the main manager file:
 *Descarrega os ficheiros do pacote e importa o ficheiro do gestor principal:*
 ```php
-require_once 'ElePHPant/ChatManager.php';
+require_once 'ElePHPantMemory/ChatManager.php';
 ```
 
 ### Usage / Utilizacao
 
 ```php
-use ElePHPant\ChatManager;
+use ElePHPantMemory\ChatManager;
 
 // 1. Grab your project's active database connection (PDO or mysqli)
 // 1. Usa a ligacao ativa do teu projeto (PDO ou mysqli)
@@ -118,21 +118,21 @@ $memory->deleteSession($session);
 ## 🛡️ Error Handling / Tratamento de Erros
 
 ### English
-ElePHPant throws custom exceptions under the `ElePHPant` namespace:
+ElePHPantMemory throws custom exceptions under the `ElePHPantMemory` namespace:
 * **`ValidationException`**: Thrown when configuration parameters are invalid (e.g. `maxTokens` limit is below 500).
 * **`StorageException`**: Thrown when database connection types are unsupported, queries fail, or prepared statement operations fail.
 
 ### Portugues (Portugal)
-O ElePHPant lanca excecoes customizadas sob o namespace `ElePHPant`:
+O ElePHPantMemory lanca excecoes customizadas sob o namespace `ElePHPantMemory`:
 * **`ValidationException`**: Lancada quando os parametros de configuracao sao invalidos (ex: limite de `maxTokens` inferior a 500).
 * **`StorageException`**: Lancada quando a ligacao de base de dados nao e suportada, as queries falham, ou ocorrem erros ao preparar statements.
 
 ```php
 try {
     $memory = new ChatManager($db, 400); // Throws ValidationException / Lanca ValidationException
-} catch (\ElePHPant\ValidationException $e) {
+} catch (\ElePHPantMemory\ValidationException $e) {
     echo "Validation failed / Validacao falhou: " . $e->getMessage();
-} catch (\ElePHPant\StorageException $e) {
+} catch (\ElePHPantMemory\StorageException $e) {
     echo "Database error / Erro de base de dados: " . $e->getMessage();
 }
 ```
