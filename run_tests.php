@@ -20,7 +20,7 @@ function assertTest(string $name, bool $expression, string $failureDetails = '')
         exit(1);
     }
 }
-
+ 
 echo "Starting ElePHPant test suite...\n\n";
 
 // 1. Setup in-memory PDO connection
