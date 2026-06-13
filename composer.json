@@ -1,8 +1,8 @@
 {
-    "name": "elephpant/memory",
+    "name": "elephpantmemory/memory",
     "description": "An ultra-lightweight, zero-dependency local memory and context manager for AI chatbots.",
     "type": "library",
-    "license": "GPL-3.0-or-later",
+    "license": "GPL-3.0",
     "authors": [
         {
             "name": "RFSW"
