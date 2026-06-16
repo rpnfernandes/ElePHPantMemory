@@ -1,9 +1,11 @@
 <?php
 
-namespace ElePHPant;
+namespace ElePHPantMemory;
 
 require_once __DIR__ . '/Exceptions.php';
 require_once __DIR__ . '/Storage.php';
+require_once __DIR__ . '/AIProvider.php';
+require_once __DIR__ . '/Intelligence.php';
 require_once __DIR__ . '/ChatManager.php';
 
 use PDO;
@@ -21,7 +23,7 @@ function assertTest(string $name, bool $expression, string $failureDetails = '')
     }
 }
  
-echo "Starting ElePHPant test suite...\n\n";
+echo "Starting ElePHPantMemory test suite...\n\n";
 
 // 1. Setup in-memory PDO connection
 try {
@@ -33,7 +35,32 @@ try {
     assertTest("Initialization and table structure creation", false, $e->getMessage());
 }
 
-// 2. Test Exceptions - Validation
+// 2. Test Exception Hierarchy
+try {
+    throw new ValidationException("Validation test error");
+} catch (ElePHPantException $e) {
+    assertTest("ValidationException inherits from ElePHPantException", $e->getMessage() === "Validation test error");
+} catch (\Throwable $e) {
+    assertTest("ValidationException inherits from ElePHPantException", false, "Expected ElePHPantException but got " . get_class($e));
+}
+
+try {
+    throw new StorageException("Storage test error");
+} catch (ElePHPantException $e) {
+    assertTest("StorageException inherits from ElePHPantException", $e->getMessage() === "Storage test error");
+} catch (\Throwable $e) {
+    assertTest("StorageException inherits from ElePHPantException", false, "Expected ElePHPantException but got " . get_class($e));
+}
+
+try {
+    throw new AIException("AI test error");
+} catch (ElePHPantException $e) {
+    assertTest("AIException inherits from ElePHPantException", $e->getMessage() === "AI test error");
+} catch (\Throwable $e) {
+    assertTest("AIException inherits from ElePHPantException", false, "Expected ElePHPantException but got " . get_class($e));
+}
+
+// 3. Test Exceptions - Validation limits
 try {
     new ChatManager(new PDO('sqlite::memory:'), 400);
     assertTest("Throws ValidationException for maxTokens < 500", false, "Expected ValidationException but none was thrown.");
@@ -43,7 +70,7 @@ try {
     assertTest("Throws ValidationException for maxTokens < 500", false, "Expected ValidationException but got " . get_class($e));
 }
 
-// 3. Test Exceptions - Storage
+// 4. Test Exceptions - Storage queries
 try {
     $storage = new Storage($pdo);
     // Execute a completely broken query to trigger StorageException
@@ -55,7 +82,7 @@ try {
     assertTest("Throws StorageException for bad queries", false, "Expected StorageException but got " . get_class($e));
 }
 
-// 4. Test Add message and TTL purge behavior
+// 5. Test Add message and TTL purge behavior
 try {
     $session = 'test_session_ttl';
     $chatManager = new ChatManager($pdo, 1000, 5); // purge after 5 days
@@ -83,7 +110,7 @@ try {
     assertTest("TTL Purge test", false, $e->getMessage());
 }
 
-// 5. Test Facts UPSERT (saveFact)
+// 6. Test Facts UPSERT (saveFact)
 try {
     $session = 'test_session_facts';
     $chatManager = new ChatManager($pdo, 2000, 30);
@@ -101,7 +128,7 @@ try {
     assertTest("Facts UPSERT test", false, $e->getMessage());
 }
 
-// 6. Test Token Limiting (maxTokens sliding window)
+// 7. Test Token Limiting (maxTokens sliding window)
 try {
     $session = 'test_session_tokens';
     // Let's set maxTokens = 500 (approx. 2000 characters total allowed)
@@ -154,7 +181,7 @@ try {
     assertTest("Token Limiting test", false, $e->getMessage() . "\n" . $e->getTraceAsString());
 }
 
-// 7. Test Lifecycle Methods
+// 8. Test Lifecycle Methods
 try {
     $session = 'test_session_lifecycle';
     $chatManager = new ChatManager($pdo, 2000, 30);
@@ -187,6 +214,82 @@ try {
     assertTest("deleteSession removes all trace of the session (empty context)", count($context) === 0);
 } catch (\Throwable $e) {
     assertTest("Lifecycle methods test", false, $e->getMessage());
+}
+
+// 9. Test Fact auto-extraction using CustomProvider
+try {
+    $session = 'test_session_auto_fact';
+    $mockAi = new CustomProvider(function(array $messages, array $options) {
+        return json_encode([
+            'user_name' => 'Rui Fernandes',
+            'preferred_language' => 'PHP'
+        ]);
+    });
+    
+    $chatManager = new ChatManager($pdo, 2000, 30, $mockAi);
+    $chatManager->autoExtractFacts = true;
+    
+    // Add message
+    $chatManager->addMessage($session, 'user', 'My name is Rui Fernandes and I write code in PHP.');
+    
+    // Verify facts were auto-extracted and stored
+    $name = $chatManager->getFact($session, 'user_name');
+    $lang = $chatManager->getFact($session, 'preferred_language');
+    
+    assertTest("Auto Fact Extraction: name extracted successfully", $name === 'Rui Fernandes');
+    assertTest("Auto Fact Extraction: language extracted successfully", $lang === 'PHP');
+} catch (\Throwable $e) {
+    assertTest("Auto Fact Extraction test failed", false, $e->getMessage() . "\n" . $e->getTraceAsString());
+}
+
+// 10. Test Smart summarization using CustomProvider
+try {
+    $session = 'test_session_smart_summary';
+    
+    $mockSummaryAi = new CustomProvider(function(array $messages, array $options) {
+        return "User is Rui Fernandes and loves coding.";
+    });
+    
+    // Set maxTokens to 500 (minimum allowed)
+    $chatManager = new ChatManager($pdo, 500, 30, $mockSummaryAi);
+    
+    // Add multiple long messages so they exceed maxTokens
+    $msg1 = "Hello, my name is Rui Fernandes. " . str_repeat('A', 1500); // ~380 tokens
+    $msg2 = "I write code in PHP for a living. " . str_repeat('B', 1500); // ~380 tokens
+    $msg3 = "I want to try this new library. " . str_repeat('C', 1500);   // ~380 tokens
+    
+    $chatManager->addMessage($session, 'user', $msg1);
+    $chatManager->addMessage($session, 'user', $msg2);
+    $chatManager->addMessage($session, 'user', $msg3);
+    
+    // getOptimizedContext should trigger smart summarization because the history exceeds 550 tokens
+    $context = $chatManager->getOptimizedContext($session);
+    
+    // Let's verify the summary fact was created
+    $summary = $chatManager->getFact($session, '_conversation_summary');
+    assertTest("Smart Summarization: summary fact created in DB", $summary === "User is Rui Fernandes and loves coding.");
+    
+    // Verify that the summarized messages (msg1 and msg2) were deleted from em_history
+    $count = $pdo->query("SELECT COUNT(*) FROM em_history WHERE session_id = 'test_session_smart_summary'")->fetchColumn();
+    assertTest("Smart Summarization: old messages deleted from DB", $count == 1);
+    
+    // Verify that the returned context contains the system prompt with the summary, and the remaining message (msg3)
+    $hasSystemSummary = false;
+    $hasMsg3 = false;
+    foreach ($context as $c) {
+        if ($c['role'] === 'system' && str_contains($c['content'], '_conversation_summary')) {
+            $hasSystemSummary = true;
+        }
+        if ($c['role'] === 'user' && str_contains($c['content'], 'new library')) {
+            $hasMsg3 = true;
+        }
+    }
+    
+    assertTest("Smart Summarization: context contains system summary", $hasSystemSummary);
+    assertTest("Smart Summarization: context contains unsummarized message", $hasMsg3);
+    
+} catch (\Throwable $e) {
+    assertTest("Smart Summarization test failed", false, $e->getMessage() . "\n" . $e->getTraceAsString());
 }
 
 echo "\n\033[32mAll tests passed successfully!\033[0m\n";

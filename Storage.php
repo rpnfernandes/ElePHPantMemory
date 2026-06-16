@@ -10,7 +10,7 @@
  * @version   1.0
  */
 
-namespace ElePHPant;
+namespace ElePHPantMemory;
 
 require_once __DIR__ . '/Exceptions.php';
 

@@ -10,11 +10,9 @@
  * @version   1.0
  */
 
-namespace ElePHPant;
+namespace ElePHPantMemory;
 
 use Exception;
-use RuntimeException;
-use InvalidArgumentException;
 
 /**
  * Base exception for the ElePHPant package.
@@ -24,9 +22,14 @@ class ElePHPantException extends Exception {}
 /**
  * Thrown when database operations or configuration fail.
  */
-class StorageException extends RuntimeException {}
+class StorageException extends ElePHPantException {}
 
 /**
  * Thrown when parameter validation fails (e.g. token limits).
  */
-class ValidationException extends InvalidArgumentException {}
+class ValidationException extends ElePHPantException {}
+
+/**
+ * Thrown when AI API operations fail.
+ */
+class AIException extends ElePHPantException {}

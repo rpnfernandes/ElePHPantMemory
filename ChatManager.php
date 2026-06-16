@@ -10,15 +10,20 @@
  * @version   1.0
  */
 
-namespace ElePHPant;
+namespace ElePHPantMemory;
 
 require_once __DIR__ . '/Exceptions.php';
 require_once __DIR__ . '/Storage.php';
+require_once __DIR__ . '/AIProvider.php';
+require_once __DIR__ . '/Intelligence.php';
 
 use DateTimeImmutable;
 
 class ChatManager {
     private Storage $storage;
+    private ?Intelligence $intelligence = null;
+
+    public bool $autoExtractFacts = false;
     
     public private(set) int $maxTokens {
         set => $value < 500 ? throw new ValidationException("Token limit is too low.") : $value;
@@ -29,17 +34,22 @@ class ChatManager {
     public function __construct(
         object $existingConnection,
         int $maxTokens = 2000,
-        int $purgeAfterDays = 30
+        int $purgeAfterDays = 30,
+        ?AIProvider $aiProvider = null
     ) {
         $this->storage = new Storage($existingConnection);
         $this->maxTokens = $maxTokens;
         $this->purgeAfterDays = $purgeAfterDays;
+        
+        if ($aiProvider !== null) {
+            $this->intelligence = new Intelligence($aiProvider);
+        }
     }
 
     /**
      * Logs conversation turn and triggers inline fast maintenance
      */
-    public function addMessage(string $sessionId, string $role, string $content): void {
+    public function addMessage(string $sessionId, string $role, string $content, bool $triggerExtraction = false): void {
         $this->storage->executeNonQuery(
             "INSERT INTO em_history (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
             [$sessionId, $role, trim($content), (new DateTimeImmutable())->format('Y-m-d H:i:s')]
@@ -49,6 +59,10 @@ class ChatManager {
             "DELETE FROM em_history WHERE session_id = ? AND created_at < ?",
             [$sessionId, (new DateTimeImmutable())->modify("-{$this->purgeAfterDays} days")->format('Y-m-d H:i:s')]
         );
+
+        if ($triggerExtraction || $this->autoExtractFacts) {
+            $this->extractFactsFromHistory($sessionId);
+        }
     }
 
     /**
@@ -67,6 +81,17 @@ class ChatManager {
         } else {
             $this->storage->executeNonQuery($sql, [$sessionId, $key, $value, $value]);
         }
+    }
+
+    /**
+     * Retrieves a specific fact for a session
+     */
+    public function getFact(string $sessionId, string $key): ?string {
+        $result = $this->storage->executeQuery(
+            "SELECT fact_value FROM em_facts WHERE session_id = ? AND fact_key = ?",
+            [$sessionId, $key]
+        );
+        return !empty($result) ? $result[0]['fact_value'] : null;
     }
 
     /**
@@ -114,13 +139,47 @@ class ChatManager {
     }
 
     /**
-     * Builds memory array payload utilizing pipeline processing and sliding window token limiting
+     * Extracts facts automatically from the most recent history messages and saves them.
+     *
+     * @param string $sessionId
+     * @param int $limit Number of messages to analyze
+     * @return array The newly extracted facts
+     */
+    public function extractFactsFromHistory(string $sessionId, int $limit = 10): array {
+        if ($this->intelligence === null) {
+            return [];
+        }
+
+        $history = $this->storage->executeQuery(
+            "SELECT role, content FROM em_history WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+            [$sessionId, $limit]
+        );
+
+        if (empty($history)) {
+            return [];
+        }
+
+        // Reverse to get chronological order (oldest to newest)
+        $history = array_reverse($history);
+
+        $extracted = $this->intelligence->extractFacts($history);
+        foreach ($extracted as $key => $value) {
+            $this->saveFact($sessionId, $key, (string)$value);
+        }
+
+        return $extracted;
+    }
+
+    /**
+     * Builds memory array payload utilizing pipeline processing and sliding window token limiting.
+     * If intelligence is enabled, it automatically triggers smart summarization for discarded messages.
      */
     public function getOptimizedContext(string $sessionId): array {
         $context = [];
         $systemPrompt = '';
         $systemTokens = 0;
 
+        // 1. Gather all facts
         if ($facts = $this->storage->executeQuery("SELECT fact_key, fact_value FROM em_facts WHERE session_id = ?", [$sessionId])) {
             $buffer = "Known facts about this user/session: ";
             foreach ($facts as $f) {
@@ -134,13 +193,14 @@ class ChatManager {
 
         $remainingTokens = $this->maxTokens - $systemTokens;
 
-        // Fetch history ordered by ID DESC (newest first) to apply token budget
+        // 2. Fetch history ordered by ID DESC (newest first)
         $history = $this->storage->executeQuery(
-            "SELECT role, content FROM em_history WHERE session_id = ? ORDER BY id DESC",
+            "SELECT id, role, content FROM em_history WHERE session_id = ? ORDER BY id DESC",
             [$sessionId]
         );
 
         $historyMessages = [];
+        $discardMessages = [];
         $accumulatedTokens = 0;
 
         foreach ($history as $m) {
@@ -148,11 +208,36 @@ class ChatManager {
             $messageTokens = (int) ceil(mb_strlen($messageContent, 'UTF-8') / 4);
 
             if ($accumulatedTokens + $messageTokens > $remainingTokens) {
-                break;
+                $discardMessages[] = $m;
+            } else {
+                array_unshift($historyMessages, ['role' => $m['role'], 'content' => $messageContent]);
+                $accumulatedTokens += $messageTokens;
             }
+        }
 
-            array_unshift($historyMessages, ['role' => $m['role'], 'content' => $messageContent]);
-            $accumulatedTokens += $messageTokens;
+        // 3. If messages were discarded and intelligence is enabled, trigger smart summarization
+        if (!empty($discardMessages) && $this->intelligence !== null) {
+            // Discarded messages are in reverse order (newest first), reverse them back to chronological
+            $discardMessages = array_reverse($discardMessages);
+            
+            $existingSummary = $this->getFact($sessionId, '_conversation_summary');
+            
+            // Generate the new consolidated summary
+            $newSummary = $this->intelligence->summarizeHistory($discardMessages, $existingSummary);
+            
+            if (!empty($newSummary)) {
+                $this->saveFact($sessionId, '_conversation_summary', $newSummary);
+                
+                // Delete summarized messages from database history
+                $maxDiscardId = max(array_column($discardMessages, 'id'));
+                $this->storage->executeNonQuery(
+                    "DELETE FROM em_history WHERE session_id = ? AND id <= ?",
+                    [$sessionId, $maxDiscardId]
+                );
+                
+                // Recalculate context with the new summary and purged history
+                return $this->getOptimizedContext($sessionId);
+            }
         }
 
         return array_merge($context, $historyMessages);
