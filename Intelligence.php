@@ -7,7 +7,7 @@
  * @author    Rui Fernandes
  * @copyright 2026 Rui Fernandes
  * @license   GPL-3.0
- * @version   1.1
+ * @version   2.0.0
  */
 
 namespace ElePHPantMemory;

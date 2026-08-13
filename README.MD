@@ -1,6 +1,6 @@
 # ElePHPantMemory 🐘💬
 
-[![Latest Version](https://img.shields.io/badge/version-1.1.0-emerald.svg?style=flat-square)](#)
+[![Latest Version](https://img.shields.io/badge/version-2.0.0-emerald.svg?style=flat-square)](#)
 [![PHP Version](https://img.shields.io/badge/PHP-8.4%2B-8892BF.svg?style=flat-square)](https://www.php.net)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat-square)](LICENSE)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-zero-success.svg?style=flat-square)](#)
