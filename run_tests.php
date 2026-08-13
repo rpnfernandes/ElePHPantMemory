@@ -292,4 +292,147 @@ try {
     assertTest("Smart Summarization test failed", false, $e->getMessage() . "\n" . $e->getTraceAsString());
 }
 
+// 11. Test AI Providers validation and properties
+try {
+    // Test OpenAI empty API key validation
+    try {
+        new OpenAIProvider('');
+        assertTest("OpenAIProvider validation: empty API key throws", false);
+    } catch (ValidationException $e) {
+        assertTest("OpenAIProvider validation: empty API key throws", true);
+    }
+
+    // Test Gemini empty API key validation
+    try {
+        new GeminiProvider('');
+        assertTest("GeminiProvider validation: empty API key throws", false);
+    } catch (ValidationException $e) {
+        assertTest("GeminiProvider validation: empty API key throws", true);
+    }
+
+    // Test Anthropic empty API key validation
+    try {
+        new AnthropicProvider('');
+        assertTest("AnthropicProvider validation: empty API key throws", false);
+    } catch (ValidationException $e) {
+        assertTest("AnthropicProvider validation: empty API key throws", true);
+    }
+
+    // Test settings initialization and property hook / asymmetric visibility checks
+    $openai = new OpenAIProvider('fake-key', 'gpt-4o', 45);
+    assertTest("OpenAIProvider settings: model initialized", $openai->model === 'gpt-4o');
+    assertTest("OpenAIProvider settings: timeout initialized", $openai->timeout === 45);
+
+    $gemini = new GeminiProvider('fake-key', 'gemini-exp', 15);
+    assertTest("GeminiProvider settings: model initialized", $gemini->model === 'gemini-exp');
+    assertTest("GeminiProvider settings: timeout initialized", $gemini->timeout === 15);
+
+    $anthropic = new AnthropicProvider('fake-key', 'claude-3-haiku', 60);
+    assertTest("AnthropicProvider settings: model initialized", $anthropic->model === 'claude-3-haiku');
+    assertTest("AnthropicProvider settings: timeout initialized", $anthropic->timeout === 60);
+
+} catch (\Throwable $e) {
+    assertTest("AI Providers validation and properties test failed", false, $e->getMessage());
+}
+
+// 12. Test Table Prefix customization
+try {
+    $prefix = 'my_custom_pref_';
+    $customChatManager = new ChatManager($pdo, 2000, 30, null, $prefix);
+    $customChatManager->addMessage('session_pref', 'user', 'Hello with prefix');
+    $customChatManager->saveFact('session_pref', 'key1', 'val1');
+    
+    // Verify that the tables indeed exist with the custom prefix name
+    $countHistory = $pdo->query("SELECT COUNT(*) FROM my_custom_pref_history")->fetchColumn();
+    $countFacts = $pdo->query("SELECT COUNT(*) FROM my_custom_pref_facts")->fetchColumn();
+    
+    assertTest("Table Prefix: history table successfully prefix-created and written", $countHistory == 1);
+    assertTest("Table Prefix: facts table successfully prefix-created and written", $countFacts == 1);
+} catch (\Throwable $e) {
+    assertTest("Table Prefix test failed", false, $e->getMessage());
+}
+
+// 13. Test Fact Expiration (TTL)
+try {
+    $session = 'session_ttl_expiration';
+    $chatManager = new ChatManager($pdo, 2000, 30);
+    
+    // Save one permanent fact and one temporary fact with a TTL of 1 second
+    $chatManager->saveFact($session, 'permanent', 'I am forever');
+    $chatManager->saveFact($session, 'temporary', 'I expire quickly', 1);
+    
+    // Verify both exist initially
+    $initialContext = $chatManager->getOptimizedContext($session);
+    $initialContent = $initialContext[0]['content'];
+    assertTest("TTL Expiration: temporary fact exists initially", str_contains($initialContent, 'temporary: I expire quickly'));
+    assertTest("TTL Expiration: permanent fact exists initially", str_contains($initialContent, 'permanent: I am forever'));
+    
+    // Sleep for 2 seconds to let the temporary fact expire
+    sleep(2);
+    
+    // Fetch context again; the temporary fact should have expired and disappeared
+    $expiredContext = $chatManager->getOptimizedContext($session);
+    $expiredContent = $expiredContext[0]['content'];
+    assertTest("TTL Expiration: temporary fact has expired and disappeared", !str_contains($expiredContent, 'temporary: I expire quickly'));
+    assertTest("TTL Expiration: permanent fact is still preserved", str_contains($expiredContent, 'permanent: I am forever'));
+} catch (\Throwable $e) {
+    assertTest("Fact Expiration (TTL) test failed", false, $e->getMessage());
+}
+
+// 14. Test Custom Extraction Guidelines
+try {
+    $session = 'session_extraction_guidelines';
+    $mockAi = new CustomProvider(function(array $messages, array $options) {
+        // Find system message to verify custom guidelines were passed
+        $systemPrompt = '';
+        foreach ($messages as $msg) {
+            if ($msg['role'] === 'system') {
+                $systemPrompt = $msg['content'];
+                break;
+            }
+        }
+        if (str_contains($systemPrompt, 'Custom Extraction Guidelines:') && str_contains($systemPrompt, 'ONLY EXTRACT NUMBERS')) {
+            return json_encode(['lucky_number' => '42']);
+        }
+        return json_encode([]);
+    });
+    
+    $chatManager = new ChatManager($pdo, 2000, 30, $mockAi);
+    $chatManager->autoExtractFacts = true;
+    $chatManager->extractionGuidelines = "ONLY EXTRACT NUMBERS";
+    
+    $chatManager->addMessage($session, 'user', 'My lucky number is 42');
+    
+    $luckyNumber = $chatManager->getFact($session, 'lucky_number');
+    assertTest("Custom Extraction Guidelines: guidelines successfully injected and processed", $luckyNumber === '42');
+} catch (\Throwable $e) {
+    assertTest("Custom Extraction Guidelines test failed", false, $e->getMessage());
+}
+
+// 15. Test Custom Context Formatter
+try {
+    $session = 'session_context_formatter';
+    $chatManager = new ChatManager($pdo, 2000, 30);
+    $chatManager->saveFact($session, 'name', 'Ze');
+    $chatManager->saveFact($session, 'hobby', 'coding');
+    
+    // Define a custom JSON formatter
+    $chatManager->contextFormatter = function(array $facts) {
+        $clean = [];
+        foreach ($facts as $f) {
+            $clean[$f['fact_key']] = $f['fact_value'];
+        }
+        return "User Profile JSON: " . json_encode($clean);
+    };
+    
+    $context = $chatManager->getOptimizedContext($session);
+    $systemMessage = $context[0]['content'];
+    
+    assertTest("Custom Context Formatter: formatter callback formatting applies", str_contains($systemMessage, 'User Profile JSON: {"name":"Ze","hobby":"coding"}') || str_contains($systemMessage, 'User Profile JSON: {"hobby":"coding","name":"Ze"}'));
+} catch (\Throwable $e) {
+    assertTest("Custom Context Formatter test failed", false, $e->getMessage());
+}
+
 echo "\n\033[32mAll tests passed successfully!\033[0m\n";
+
+

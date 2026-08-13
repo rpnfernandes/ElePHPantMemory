@@ -7,7 +7,7 @@
  * @author    Rui Fernandes
  * @copyright 2026 Rui Fernandes
  * @license   GPL-3.0
- * @version   1.0
+ * @version   1.1
  */
 
 namespace ElePHPantMemory;
@@ -24,20 +24,27 @@ class ChatManager {
     private ?Intelligence $intelligence = null;
 
     public bool $autoExtractFacts = false;
+    public ?string $extractionGuidelines = null;
+    
+    /** @var callable|null */
+    public $contextFormatter = null;
     
     public private(set) int $maxTokens {
         set => $value < 500 ? throw new ValidationException("Token limit is too low.") : $value;
     }
     
     public private(set) int $purgeAfterDays;
+    public private(set) string $tablePrefix;
 
     public function __construct(
         object $existingConnection,
         int $maxTokens = 2000,
         int $purgeAfterDays = 30,
-        ?AIProvider $aiProvider = null
+        ?AIProvider $aiProvider = null,
+        string $tablePrefix = 'em_'
     ) {
-        $this->storage = new Storage($existingConnection);
+        $this->tablePrefix = $tablePrefix;
+        $this->storage = new Storage($existingConnection, $tablePrefix);
         $this->maxTokens = $maxTokens;
         $this->purgeAfterDays = $purgeAfterDays;
         
@@ -50,13 +57,14 @@ class ChatManager {
      * Logs conversation turn and triggers inline fast maintenance
      */
     public function addMessage(string $sessionId, string $role, string $content, bool $triggerExtraction = false): void {
+        $historyTable = $this->tablePrefix . 'history';
         $this->storage->executeNonQuery(
-            "INSERT INTO em_history (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO {$historyTable} (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
             [$sessionId, $role, trim($content), (new DateTimeImmutable())->format('Y-m-d H:i:s')]
         );
         
         $this->storage->executeNonQuery(
-            "DELETE FROM em_history WHERE session_id = ? AND created_at < ?",
+            "DELETE FROM {$historyTable} WHERE session_id = ? AND created_at < ?",
             [$sessionId, (new DateTimeImmutable())->modify("-{$this->purgeAfterDays} days")->format('Y-m-d H:i:s')]
         );
 
@@ -66,29 +74,43 @@ class ChatManager {
     }
 
     /**
-     * Stores metadata using optimized UPSERT statements tailored per engine
+     * Stores metadata using optimized UPSERT statements tailored per engine with optional TTL
      */
-    public function saveFact(string $sessionId, string $key, string $value): void {
+    public function saveFact(string $sessionId, string $key, string $value, ?int $ttlSeconds = null): void {
+        $factsTable = $this->tablePrefix . 'facts';
+        $expiresAt = null;
+        if ($ttlSeconds !== null) {
+            $expiresAt = (new DateTimeImmutable())->modify("+{$ttlSeconds} seconds")->format('Y-m-d H:i:s');
+        }
+
         $sql = match($this->storage->driver) {
-            'sqlite' => "INSERT INTO em_facts (session_id, fact_key, fact_value) VALUES (?, ?, ?) ON CONFLICT(session_id, fact_key) DO UPDATE SET fact_value = ?",
-            'sqlsrv' => "MERGE em_facts AS t USING (SELECT ? AS s, ? AS k) AS src ON (t.session_id = src.s AND t.fact_key = src.k) WHEN MATCHED THEN UPDATE SET fact_value = ? WHEN NOT MATCHED THEN INSERT (session_id, fact_key, fact_value) VALUES (src.s, src.k, ?);",
-            'pgsql'  => "INSERT INTO em_facts (session_id, fact_key, fact_value) VALUES (?, ?, ?) ON CONFLICT (session_id, fact_key) DO UPDATE SET fact_value = EXCLUDED.fact_value",
-            default  => "INSERT INTO em_facts (session_id, fact_key, fact_value) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE fact_value = ?"
+            'sqlite' => "INSERT INTO {$factsTable} (session_id, fact_key, fact_value, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT(session_id, fact_key) DO UPDATE SET fact_value = ?, expires_at = ?",
+            'sqlsrv' => "MERGE {$factsTable} AS t USING (SELECT ? AS s, ? AS k) AS src ON (t.session_id = src.s AND t.fact_key = src.k) WHEN MATCHED THEN UPDATE SET fact_value = ?, expires_at = ? WHEN NOT MATCHED THEN INSERT (session_id, fact_key, fact_value, expires_at) VALUES (src.s, src.k, ?, ?);",
+            'pgsql'  => "INSERT INTO {$factsTable} (session_id, fact_key, fact_value, expires_at) VALUES (?, ?, ?, ?) ON CONFLICT (session_id, fact_key) DO UPDATE SET fact_value = EXCLUDED.fact_value, expires_at = EXCLUDED.expires_at",
+            default  => "INSERT INTO {$factsTable} (session_id, fact_key, fact_value, expires_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE fact_value = ?, expires_at = ?"
         };
 
         if ($this->storage->driver === 'pgsql') {
-            $this->storage->executeNonQuery($sql, [$sessionId, $key, $value]);
+            $this->storage->executeNonQuery($sql, [$sessionId, $key, $value, $expiresAt]);
         } else {
-            $this->storage->executeNonQuery($sql, [$sessionId, $key, $value, $value]);
+            $this->storage->executeNonQuery($sql, [$sessionId, $key, $value, $expiresAt, $value, $expiresAt]);
         }
     }
 
     /**
-     * Retrieves a specific fact for a session
+     * Retrieves a specific fact for a session, filtering out expired ones
      */
     public function getFact(string $sessionId, string $key): ?string {
+        $factsTable = $this->tablePrefix . 'facts';
+        
+        // Active GC
+        $this->storage->executeNonQuery(
+            "DELETE FROM {$factsTable} WHERE session_id = ? AND expires_at IS NOT NULL AND expires_at < ?",
+            [$sessionId, (new DateTimeImmutable())->format('Y-m-d H:i:s')]
+        );
+
         $result = $this->storage->executeQuery(
-            "SELECT fact_value FROM em_facts WHERE session_id = ? AND fact_key = ?",
+            "SELECT fact_value FROM {$factsTable} WHERE session_id = ? AND fact_key = ?",
             [$sessionId, $key]
         );
         return !empty($result) ? $result[0]['fact_value'] : null;
@@ -98,8 +120,9 @@ class ChatManager {
      * Deletes a specific fact for a session
      */
     public function deleteFact(string $sessionId, string $key): void {
+        $factsTable = $this->tablePrefix . 'facts';
         $this->storage->executeNonQuery(
-            "DELETE FROM em_facts WHERE session_id = ? AND fact_key = ?",
+            "DELETE FROM {$factsTable} WHERE session_id = ? AND fact_key = ?",
             [$sessionId, $key]
         );
     }
@@ -108,8 +131,9 @@ class ChatManager {
      * Clears all facts for a session
      */
     public function clearFacts(string $sessionId): void {
+        $factsTable = $this->tablePrefix . 'facts';
         $this->storage->executeNonQuery(
-            "DELETE FROM em_facts WHERE session_id = ?",
+            "DELETE FROM {$factsTable} WHERE session_id = ?",
             [$sessionId]
         );
     }
@@ -118,8 +142,9 @@ class ChatManager {
      * Clears short-term conversation history for a session
      */
     public function clearHistory(string $sessionId): void {
+        $historyTable = $this->tablePrefix . 'history';
         $this->storage->executeNonQuery(
-            "DELETE FROM em_history WHERE session_id = ?",
+            "DELETE FROM {$historyTable} WHERE session_id = ?",
             [$sessionId]
         );
     }
@@ -128,12 +153,15 @@ class ChatManager {
      * Deletes all data (facts and history) for a session
      */
     public function deleteSession(string $sessionId): void {
+        $factsTable = $this->tablePrefix . 'facts';
+        $historyTable = $this->tablePrefix . 'history';
+        
         $this->storage->executeNonQuery(
-            "DELETE FROM em_facts WHERE session_id = ?",
+            "DELETE FROM {$factsTable} WHERE session_id = ?",
             [$sessionId]
         );
         $this->storage->executeNonQuery(
-            "DELETE FROM em_history WHERE session_id = ?",
+            "DELETE FROM {$historyTable} WHERE session_id = ?",
             [$sessionId]
         );
     }
@@ -150,8 +178,9 @@ class ChatManager {
             return [];
         }
 
+        $historyTable = $this->tablePrefix . 'history';
         $history = $this->storage->executeQuery(
-            "SELECT role, content FROM em_history WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+            "SELECT role, content FROM {$historyTable} WHERE session_id = ? ORDER BY id DESC LIMIT ?",
             [$sessionId, $limit]
         );
 
@@ -162,7 +191,7 @@ class ChatManager {
         // Reverse to get chronological order (oldest to newest)
         $history = array_reverse($history);
 
-        $extracted = $this->intelligence->extractFacts($history);
+        $extracted = $this->intelligence->extractFacts($history, $this->extractionGuidelines);
         foreach ($extracted as $key => $value) {
             $this->saveFact($sessionId, $key, (string)$value);
         }
@@ -178,14 +207,26 @@ class ChatManager {
         $context = [];
         $systemPrompt = '';
         $systemTokens = 0;
+        $factsTable = $this->tablePrefix . 'facts';
+        $historyTable = $this->tablePrefix . 'history';
+
+        // Clean up expired facts for this session
+        $this->storage->executeNonQuery(
+            "DELETE FROM {$factsTable} WHERE session_id = ? AND expires_at IS NOT NULL AND expires_at < ?",
+            [$sessionId, (new DateTimeImmutable())->format('Y-m-d H:i:s')]
+        );
 
         // 1. Gather all facts
-        if ($facts = $this->storage->executeQuery("SELECT fact_key, fact_value FROM em_facts WHERE session_id = ?", [$sessionId])) {
-            $buffer = "Known facts about this user/session: ";
-            foreach ($facts as $f) {
-                $buffer .= "[{$f['fact_key']}: {$f['fact_value']}] ";
+        if ($facts = $this->storage->executeQuery("SELECT fact_key, fact_value FROM {$factsTable} WHERE session_id = ?", [$sessionId])) {
+            if ($this->contextFormatter !== null) {
+                $systemPrompt = ($this->contextFormatter)($facts);
+            } else {
+                $buffer = "Known facts about this user/session: ";
+                foreach ($facts as $f) {
+                    $buffer .= "[{$f['fact_key']}: {$f['fact_value']}] ";
+                }
+                $systemPrompt = rtrim($buffer);
             }
-            $systemPrompt = rtrim($buffer);
             // Estimate tokens: 1 token ~ 4 characters
             $systemTokens = (int) ceil(mb_strlen($systemPrompt, 'UTF-8') / 4);
             $context[] = ['role' => 'system', 'content' => $systemPrompt];
@@ -195,7 +236,7 @@ class ChatManager {
 
         // 2. Fetch history ordered by ID DESC (newest first)
         $history = $this->storage->executeQuery(
-            "SELECT id, role, content FROM em_history WHERE session_id = ? ORDER BY id DESC",
+            "SELECT id, role, content FROM {$historyTable} WHERE session_id = ? ORDER BY id DESC",
             [$sessionId]
         );
 
@@ -231,7 +272,7 @@ class ChatManager {
                 // Delete summarized messages from database history
                 $maxDiscardId = max(array_column($discardMessages, 'id'));
                 $this->storage->executeNonQuery(
-                    "DELETE FROM em_history WHERE session_id = ? AND id <= ?",
+                    "DELETE FROM {$historyTable} WHERE session_id = ? AND id <= ?",
                     [$sessionId, $maxDiscardId]
                 );
                 

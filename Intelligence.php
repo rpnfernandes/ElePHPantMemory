@@ -7,7 +7,7 @@
  * @author    Rui Fernandes
  * @copyright 2026 Rui Fernandes
  * @license   GPL-3.0
- * @version   1.0
+ * @version   1.1
  */
 
 namespace ElePHPantMemory;
@@ -26,17 +26,23 @@ class Intelligence {
      * Analyzes conversation history to extract key facts about the user/session.
      *
      * @param array $messages Array of messages
+     * @param string|null $guidelines Optional custom guidelines for extraction
      * @return array Key-value pairs of extracted facts
      * @throws AIException
      */
-    public function extractFacts(array $messages): array {
+    public function extractFacts(array $messages, ?string $guidelines = null): array {
         if (empty($messages)) {
             return [];
         }
 
         $systemPrompt = "You are a precise, automated information-extraction assistant.\n"
-            . "Analyze the conversation history provided below. Extract any permanent, key, or long-term facts about the user, their preferences, contact details, or business context (e.g. name, location, language preference, VAT/NIF number, order IDs, interest in products).\n\n"
-            . "Rules:\n"
+            . "Analyze the conversation history provided below. Extract any permanent, key, or long-term facts about the user, their preferences, contact details, or business context (e.g. name, location, language preference, VAT/NIF number, order IDs, interest in products).\n\n";
+
+        if (!empty($guidelines)) {
+            $systemPrompt .= "Custom Extraction Guidelines:\n" . trim($guidelines) . "\n\n";
+        }
+
+        $systemPrompt .= "Rules:\n"
             . "1. Focus ONLY on permanent or high-value long-term facts.\n"
             . "2. Return a clean, valid JSON object where keys represent the fact labels (short, snake_case, lowercase) and values represent the fact values.\n"
             . "3. If no new long-term facts are found, or if the messages do not contain extractable facts, return an empty JSON object: {}.\n"

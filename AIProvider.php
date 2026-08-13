@@ -7,7 +7,7 @@
  * @author    Rui Fernandes
  * @copyright 2026 Rui Fernandes
  * @license   GPL-3.0
- * @version   1.0
+ * @version   1.1
  */
 
 namespace ElePHPantMemory;
@@ -27,16 +27,66 @@ interface AIProvider {
 }
 
 /**
+ * Helper trait containing native cURL HTTP request execution code to avoid duplication.
+ */
+trait HttpClientTrait {
+    /**
+     * Executes a POST request using native PHP cURL.
+     *
+     * @param string $url
+     * @param array $headers
+     * @param array $body
+     * @param int $timeout
+     * @return string
+     * @throws AIException
+     */
+    private function sendRequest(string $url, array $headers, array $body, int $timeout): string {
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new AIException("Failed to initialize cURL.");
+        }
+
+        $jsonPayload = json_encode($body);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $jsonPayload,
+            CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_TIMEOUT => $timeout,
+        ]);
+
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($response === false) {
+            throw new AIException("cURL Request failed: " . $error);
+        }
+
+        if ($httpCode >= 400) {
+            throw new AIException("API returned HTTP code {$httpCode}: " . $response);
+        }
+
+        return $response;
+    }
+}
+
+/**
  * Native cURL client implementation for OpenAI Chat Completion API.
  */
 class OpenAIProvider implements AIProvider {
+    use HttpClientTrait;
+
     private string $apiKey;
-    private string $model;
+    public private(set) string $model;
+    public private(set) int $timeout;
     private string $endpoint;
 
     public function __construct(
         string $apiKey,
         string $model = 'gpt-4o-mini',
+        int $timeout = 30,
         string $endpoint = 'https://api.openai.com/v1/chat/completions'
     ) {
         if (empty($apiKey)) {
@@ -44,6 +94,7 @@ class OpenAIProvider implements AIProvider {
         }
         $this->apiKey = $apiKey;
         $this->model = $model;
+        $this->timeout = $timeout;
         $this->endpoint = $endpoint;
     }
 
@@ -66,7 +117,8 @@ class OpenAIProvider implements AIProvider {
             'Authorization: Bearer ' . $this->apiKey,
         ];
 
-        $responseStr = $this->sendRequest($this->endpoint, $headers, $body);
+        $timeout = $options['timeout'] ?? $this->timeout;
+        $responseStr = $this->sendRequest($this->endpoint, $headers, $body, $timeout);
         $data = json_decode($responseStr, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
@@ -84,50 +136,23 @@ class OpenAIProvider implements AIProvider {
 
         return $content;
     }
-
-    private function sendRequest(string $url, array $headers, array $body): string {
-        $ch = curl_init($url);
-        if ($ch === false) {
-            throw new AIException("Failed to initialize cURL.");
-        }
-
-        $jsonPayload = json_encode($body);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $jsonPayload,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_TIMEOUT => 30,
-        ]);
-
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($response === false) {
-            throw new AIException("cURL Request to OpenAI failed: " . $error);
-        }
-
-        if ($httpCode >= 400) {
-            throw new AIException("OpenAI API returned HTTP code {$httpCode}: " . $response);
-        }
-
-        return $response;
-    }
 }
 
 /**
  * Native cURL client implementation for Gemini Generate Content API.
  */
 class GeminiProvider implements AIProvider {
+    use HttpClientTrait;
+
     private string $apiKey;
-    private string $model;
+    public private(set) string $model;
+    public private(set) int $timeout;
     private string $endpointTemplate;
 
     public function __construct(
         string $apiKey,
         string $model = 'gemini-1.5-flash',
+        int $timeout = 30,
         string $endpointTemplate = 'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s'
     ) {
         if (empty($apiKey)) {
@@ -135,6 +160,7 @@ class GeminiProvider implements AIProvider {
         }
         $this->apiKey = $apiKey;
         $this->model = $model;
+        $this->timeout = $timeout;
         $this->endpointTemplate = $endpointTemplate;
     }
 
@@ -186,7 +212,8 @@ class GeminiProvider implements AIProvider {
             'Content-Type: application/json',
         ];
 
-        $responseStr = $this->sendRequest($url, $headers, $body);
+        $timeout = $options['timeout'] ?? $this->timeout;
+        $responseStr = $this->sendRequest($url, $headers, $body, $timeout);
         $data = json_decode($responseStr, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
@@ -204,36 +231,90 @@ class GeminiProvider implements AIProvider {
 
         return $content;
     }
+}
 
-    private function sendRequest(string $url, array $headers, array $body): string {
-        $ch = curl_init($url);
-        if ($ch === false) {
-            throw new AIException("Failed to initialize cURL.");
+/**
+ * Native cURL client implementation for Anthropic (Claude) Messages API.
+ */
+class AnthropicProvider implements AIProvider {
+    use HttpClientTrait;
+
+    private string $apiKey;
+    public private(set) string $model;
+    public private(set) int $timeout;
+    private string $endpoint;
+
+    public function __construct(
+        string $apiKey,
+        string $model = 'claude-3-5-sonnet-latest',
+        int $timeout = 30,
+        string $endpoint = 'https://api.anthropic.com/v1/messages'
+    ) {
+        if (empty($apiKey)) {
+            throw new ValidationException("Anthropic API key cannot be empty.");
+        }
+        $this->apiKey = $apiKey;
+        $this->model = $model;
+        $this->timeout = $timeout;
+        $this->endpoint = $endpoint;
+    }
+
+    public function generateResponse(array $messages, array $options = []): string {
+        $systemInstructions = '';
+        $filteredMessages = [];
+
+        foreach ($messages as $msg) {
+            $role = strtolower($msg['role'] ?? 'user');
+            $content = $msg['content'] ?? '';
+
+            if ($role === 'system') {
+                $systemInstructions .= (empty($systemInstructions) ? '' : "\n") . $content;
+            } else {
+                $filteredMessages[] = [
+                    'role' => $role,
+                    'content' => $content,
+                ];
+            }
         }
 
-        $jsonPayload = json_encode($body);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $jsonPayload,
-            CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_TIMEOUT => 30,
-        ]);
+        $body = [
+            'model' => $this->model,
+            'messages' => $filteredMessages,
+            'max_tokens' => $options['max_tokens'] ?? 1024,
+        ];
 
-        $response = curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $error = curl_error($ch);
-        curl_close($ch);
-
-        if ($response === false) {
-            throw new AIException("cURL Request to Gemini failed: " . $error);
+        if (!empty($systemInstructions)) {
+            $body['system'] = $systemInstructions;
         }
 
-        if ($httpCode >= 400) {
-            throw new AIException("Gemini API returned HTTP code {$httpCode}: " . $response);
+        if (isset($options['temperature'])) {
+            $body['temperature'] = $options['temperature'];
         }
 
-        return $response;
+        $headers = [
+            'Content-Type: application/json',
+            'x-api-key: ' . $this->apiKey,
+            'anthropic-version: 2023-06-01',
+        ];
+
+        $timeout = $options['timeout'] ?? $this->timeout;
+        $responseStr = $this->sendRequest($this->endpoint, $headers, $body, $timeout);
+        $data = json_decode($responseStr, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new AIException("Failed to decode Anthropic JSON response: " . json_last_error_msg());
+        }
+
+        if (isset($data['error'])) {
+            throw new AIException("Anthropic API Error: " . ($data['error']['message'] ?? 'Unknown error'));
+        }
+
+        $content = $data['content'][0]['text'] ?? null;
+        if ($content === null) {
+            throw new AIException("Anthropic response did not contain message text.");
+        }
+
+        return $content;
     }
 }
 
