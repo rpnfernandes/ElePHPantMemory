@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * ElePHPant Memory - Local memory and context manager for AI chatbots.
  *
