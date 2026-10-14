@@ -2,11 +2,7 @@
 
 namespace ElePHPantMemory;
 
-require_once __DIR__ . '/Exceptions.php';
-require_once __DIR__ . '/Storage.php';
-require_once __DIR__ . '/AIProvider.php';
-require_once __DIR__ . '/Intelligence.php';
-require_once __DIR__ . '/ChatManager.php';
+require_once __DIR__ . '/autoload.php';
 
 use PDO;
 

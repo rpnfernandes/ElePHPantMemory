@@ -12,9 +12,6 @@
 
 namespace ElePHPantMemory;
 
-require_once __DIR__ . '/Exceptions.php';
-require_once __DIR__ . '/AIProvider.php';
-
 class Intelligence {
     private AIProvider $ai;
 

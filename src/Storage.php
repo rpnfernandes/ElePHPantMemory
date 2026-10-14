@@ -12,8 +12,6 @@
 
 namespace ElePHPantMemory;
 
-require_once __DIR__ . '/Exceptions.php';
-
 use PDO;
 use mysqli;
 

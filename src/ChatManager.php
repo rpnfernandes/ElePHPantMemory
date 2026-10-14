@@ -12,11 +12,6 @@
 
 namespace ElePHPantMemory;
 
-require_once __DIR__ . '/Exceptions.php';
-require_once __DIR__ . '/Storage.php';
-require_once __DIR__ . '/AIProvider.php';
-require_once __DIR__ . '/Intelligence.php';
-
 use DateTimeImmutable;
 
 class ChatManager {
@@ -58,6 +53,7 @@ class ChatManager {
      */
     public function addMessage(string $sessionId, string $role, string $content, bool $triggerExtraction = false): void {
         $historyTable = $this->tablePrefix . 'history';
+
         $this->storage->executeNonQuery(
             "INSERT INTO {$historyTable} (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
             [$sessionId, $role, trim($content), (new DateTimeImmutable())->format('Y-m-d H:i:s')]

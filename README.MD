@@ -96,7 +96,7 @@ composer require elephpantmemory/memory
 Download the package files and include the main manager file:
 *Descarrega os ficheiros do pacote e importa o ficheiro do gestor principal:*
 ```php
-require_once 'ElePHPantMemory/ChatManager.php';
+require_once 'ElePHPantMemory/autoload.php';
 ```
 
 ---
