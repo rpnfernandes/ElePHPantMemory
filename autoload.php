@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 /**
  * ElePHPant Memory - PSR-4 Fallback Autoloader for standalone / non-Composer usage.
  *
